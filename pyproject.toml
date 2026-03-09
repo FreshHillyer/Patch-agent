@@ -1,0 +1,26 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "patch-pipeline"
+version = "0.1.0"
+description = "补丁回合自动化流水线：PR commits 合入 + OpenCode patch/review agents"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "typer>=0.9.0",
+    "requests>=2.28.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff"]
+
+[project.scripts]
+patch-pipeline = "patch_pipeline.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/patch_pipeline"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/patch_pipeline/agents" = "patch_pipeline/agents"

@@ -1,3 +1,4 @@
 openEuler-Kernel-kunpeng/*
 openEuler-Kernel-origin/*
 __pycache__/
+.venv/
