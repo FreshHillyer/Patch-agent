@@ -21,7 +21,7 @@ from .pr_parser import (
 def _run_apply_loop(
     to_repo: str,
     commits: list,
-    show_patch: bool = True,
+    show_patch: bool = False,
 ) -> None:
     """对 commit 列表执行合入循环。"""
     consecutive_errors = 0
@@ -57,8 +57,14 @@ def _run_apply_loop(
             consecutive_errors = 0
             continue
 
-        ok, conflict = apply_patch(to_repo, commit.patch_content, fuzz=0)
+        ok, conflict = apply_patch(
+            to_repo,
+            commit.patch_content,
+            fuzz=0,
+            patch_label=commit.sha[:7],
+        )
 
+        patch_agent_used = False
         if not ok and conflict:
             # apply 失败时再检查：可能内容已存在但上下文略有差异（如 ub_fwctl）
             if is_patch_already_applied(to_repo, commit.patch_content):
@@ -66,7 +72,9 @@ def _run_apply_loop(
                 consecutive_errors = 0
                 continue
             print("  git apply 冲突，调用 Patch Agent...")
-            patch_ok, patch_msg = run_patch_agent(to_repo, conflict)
+            patch_ok, patch_msg = run_patch_agent(
+                to_repo, conflict, patch_label=commit.sha[:7]
+            )
             if not patch_ok:
                 print(f"  Patch Agent 失败: {patch_msg}")
                 consecutive_errors += 1
@@ -74,12 +82,14 @@ def _run_apply_loop(
                 continue
             remove_reject_files(to_repo)
             ok = True
+            patch_agent_used = True
 
         if not ok:
             consecutive_errors += 1
             continue
 
-        if commit.patch_content.strip():
+        # Review 仅在 os-merge-expert 调用成功后才执行
+        if patch_agent_used and commit.patch_content.strip():
             print("  合入成功，调用 Review Agent...")
             review_ok, review_msg = run_review_agent(to_repo, commit.message)
             if not review_ok:

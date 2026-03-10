@@ -19,6 +19,26 @@ class CommitInfo:
     changed_files: List[str]  # 有实际修改的文件列表
 
 
+def _get_topological_order(shas: List[str], repo: str) -> List[str]:
+    """
+    使用 git rev-list --topo-order --no-walk --reverse 获取 commit 的真实拓扑顺序。
+    确保合入时父 commit 在子 commit 之前。
+    """
+    if not shas:
+        return []
+    if len(shas) == 1:
+        return shas
+    result = subprocess.run(
+        ["git", "rev-list", "--topo-order", "--no-walk", "--reverse"] + shas,
+        cwd=repo,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return shas  # 失败时保持原顺序
+    return [s.strip() for s in result.stdout.strip().split("\n") if s.strip()]
+
+
 def _parse_patch_files(patch_content: str) -> List[str]:
     """从 patch 内容解析出有实际修改的文件路径。"""
     if not patch_content or not patch_content.strip():
@@ -95,7 +115,7 @@ def fetch_commits_from_local(
     to_branch: 目标分支（如 main）
 
     Returns:
-        按 git 拓扑序（父→子）排列的 commit 列表。
+        按顺序排列的 commit 列表。
     """
     from_repo = str(Path(from_repo).resolve())
     to_repo = str(Path(to_repo).resolve())
@@ -142,6 +162,7 @@ def fetch_commits_from_local(
             check=True,
         )
         shas = [s.strip() for s in log_result.stdout.strip().split("\n") if s.strip()]
+        shas = _get_topological_order(shas, from_repo)
     finally:
         subprocess.run(
             ["git", "remote", "remove", remote_name],
@@ -245,7 +266,7 @@ def fetch_commits_from_gitee(
     to_branch: 目标分支（如 main）
 
     Returns:
-        按 git 拓扑序（父→子）排列的 commit 列表，保证 patch 按依赖顺序合入。
+        按 PR 内顺序排列的 commit 列表。
     """
     owner, repo, pr_number = _parse_gitee_url(pr_url)
     from_repo = str(Path(from_repo).resolve())
@@ -376,9 +397,14 @@ def fetch_commits_from_gitee(
             capture_output=True,
         )
 
-    # 顺序：始终用 git 拓扑序（git log --reverse），保证 patch 按依赖顺序合入
-    # API 顺序可能因分页等问题不可靠，git 拓扑序是父→子的正确顺序
-    ordered_shas = pr_shas
+    # 按 PR 顺序（API 返回顺序与 merge-base 的交集）构建 commit 列表
+    api_sha_order = [c["sha"] for c in commits_data]
+    pr_sha_set = set(pr_shas)
+    ordered_shas = [s for s in api_sha_order if s in pr_sha_set]
+    if not ordered_shas:
+        ordered_shas = pr_shas
+    # 使用 git rev-list --topo-order --no-walk --reverse 获取真实拓扑顺序
+    ordered_shas = _get_topological_order(ordered_shas, from_repo)
 
     result: List[CommitInfo] = []
     for sha in ordered_shas:
@@ -441,7 +467,7 @@ def fetch_commits_from_gitcode(
     token: GitCode 个人访问令牌（可选，https://gitcode.com/setting/token-classic 创建）
 
     Returns:
-        按 git 拓扑序（父→子）排列的 commit 列表，保证 patch 按依赖顺序合入。
+        按 PR 内顺序排列的 commit 列表。
     """
     owner, repo, pr_number = _parse_gitcode_url(pr_url)
     from_repo = str(Path(from_repo).resolve())
@@ -590,9 +616,17 @@ def fetch_commits_from_gitcode(
     if not shas:
         return []
 
-    # 顺序：始终用 git 拓扑序（git log --reverse base..head），保证 patch 按依赖顺序合入
-    # API 顺序可能因分页等问题不可靠，git 拓扑序是父→子的正确顺序
-    ordered_shas = shas
+    # 有 API 数据时按 API 顺序，否则按 git log 顺序
+    if commits_data:
+        api_sha_order = [c["sha"] for c in commits_data]
+        pr_sha_set = set(shas)
+        ordered_shas = [s for s in api_sha_order if s in pr_sha_set]
+        if not ordered_shas:
+            ordered_shas = shas
+    else:
+        ordered_shas = shas
+    # 使用 git rev-list --topo-order --no-walk --reverse 获取真实拓扑顺序
+    ordered_shas = _get_topological_order(ordered_shas, from_repo)
 
     result: List[CommitInfo] = []
     for sha in ordered_shas:

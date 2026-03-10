@@ -9,17 +9,18 @@ from .git_apply import ConflictInfo, read_file_safe
 
 
 def _ensure_agents_in_repo(repo_path: str) -> None:
-    """将 agent 配置复制到目标仓库的 .opencode/agents/。"""
-    # 优先从包内 agents 目录复制（pip 安装后可用）
-    agents_src = Path(__file__).parent / "agents"
-    if not agents_src.exists():
-        agents_src = Path(__file__).parent.parent.parent / ".opencode" / "agents"
-    agents_dst = Path(repo_path) / ".opencode" / "agents"
-    if not agents_src.exists():
-        return
+    """将 agent 配置复制到目标仓库的 .opencode/agent/。"""
+    proj_root = Path(__file__).parent.parent.parent
+    agents_dst = Path(repo_path) / ".opencode" / "agent"
     agents_dst.mkdir(parents=True, exist_ok=True)
-    for f in agents_src.glob("*.md"):
-        shutil.copy2(f, agents_dst / f.name)
+    # 包内 agents (patch, review) + 项目 .opencode/agent (os-merge-expert)
+    for agents_src in [
+        Path(__file__).parent / "agents",
+        proj_root / ".opencode" / "agent",
+    ]:
+        if agents_src.exists():
+            for f in agents_src.glob("*.md"):
+                shutil.copy2(f, agents_dst / f.name)
 
 
 def _run_opencode(
@@ -46,6 +47,9 @@ def _run_opencode(
         repo_path,
         prompt,
     ]
+    repo_abs = str(Path(repo_path).resolve())
+    cmd_preview = f"opencode run --agent {agent} --format json --dir {repo_abs}"
+    print("运行命令：", cmd_preview, f'"{prompt}"')
 
     try:
         proc = subprocess.Popen(
@@ -66,7 +70,7 @@ def _run_opencode(
     if proc.returncode != 0:
         return False, stderr or stdout or f"opencode 退出码 {proc.returncode}"
 
-    # 解析 JSONL
+    # 解析 JSONL：仅提取 type=text 的 part.text，拼接后返回给用户
     has_error = False
     text_parts: list[str] = []
 
@@ -86,48 +90,61 @@ def _run_opencode(
             msg = data.get("message", str(err))
             return False, msg
         if t == "text":
-            part = obj.get("part", {})
-            text_parts.append(part.get("text", ""))
-        if t == "step_finish":
-            reason = obj.get("part", {}).get("reason")
-            if reason == "stop" and has_error:
-                pass  # 已在 error 处理
-            elif reason == "stop":
-                pass  # 正常结束
+            part = obj.get("part") or {}
+            text = part.get("text", "") if isinstance(part, dict) else ""
+            if text:
+                text_parts.append(text)
 
-    return not has_error, "\n".join(text_parts)
+    result = "\n".join(text_parts)
+    if result:
+        print("--- OpenCode 输出 ---")
+        print(result)
+        print("---")
+        fwafwauihuih
+    
+    return not has_error, result
 
 
-def run_patch_agent(repo_path: str, conflict: ConflictInfo) -> tuple[bool, str]:
+def run_patch_agent(
+    repo_path: str,
+    conflict: ConflictInfo,
+    patch_label: str,
+) -> tuple[bool, str]:
     """
-    调用 Patch Agent 解决冲突。
+    调用 os-merge-expert Agent 解决冲突。
+    patch 使用绝对路径引用 patch_files/<label>.patch，目标仓库为 --to 仓库。
 
     Returns:
         (成功, 消息)
     """
-    # 构建 prompt：包含 patch、rej 内容、目标文件内容
+    patch_path = (Path(repo_path) / "patch_files" / f"{patch_label}.patch").resolve()
+    if not patch_path.exists():
+        return False, f"patch 文件不存在: {patch_path}"
+
+    # 构建 prompt：patch 用绝对路径，rej 内容、目标文件内容
     parts = [
         "请解决以下 git apply 冲突，将 patch 的意图正确合入到目标文件中。",
         "不要改变原 commit 的修改目的。",
         "",
-        "=== 原始 patch ===",
-        conflict.patch_content,
+        f"=== patch 文件（绝对路径）===",
+        str(patch_path),
         "",
         "=== git apply 错误输出 ===",
         conflict.apply_stderr or "(无)",
     ]
-
-    for rej_path, rej_content in conflict.rej_contents.items():
-        parts.append(f"=== 拒绝块 {rej_path} ===")
-        parts.append(rej_content)
-        target_path = rej_path[:-4] if rej_path.endswith(".rej") else rej_path
-        file_content = read_file_safe(repo_path, target_path)
-        parts.append(f"=== 当前目标文件 {target_path} ===")
-        parts.append(file_content or "(空或不存在)")
-        parts.append("")
+    
+    # for rej_path, rej_content in conflict.rej_contents.items():
+    #     parts.append(f"=== 拒绝块 {rej_path} ===")
+    #     parts.append(rej_content)
+    #     target_path = rej_path[:-4] if rej_path.endswith(".rej") else rej_path
+    #     file_content = read_file_safe(repo_path, target_path)
+    #     parts.append(f"=== 当前目标文件 {target_path} ===")
+    #     parts.append(file_content or "(空或不存在)")
+    #     parts.append("")
 
     prompt = "\n".join(parts)
-    return _run_opencode(repo_path, prompt, "patch")
+    print(prompt)
+    return _run_opencode(repo_path, prompt, "os-merge-expert")
 
 
 def run_review_agent(repo_path: str, commit_message: str) -> tuple[bool, str]:
@@ -151,19 +168,14 @@ def run_review_agent(repo_path: str, commit_message: str) -> tuple[bool, str]:
 
     prompt = f"""请审查以下合入变更。
 
-Commit 信息：{commit_message}
+原分支补丁Commit 信息：{commit_message}
 
-=== 当前 diff（待审查）===
+=== 当前适配后diff（待审查）===
 {diff_content}
 
-请检查：
-1. 修改目的是否正确
-2. 代码变更量是否过大
-3. 是否存在语法错误
+请检查，并输出你的review结论。"""
 
-第一行必须为「通过」或「不通过」，随后简要说明原因。"""
-
-    ok, output = _run_opencode(repo_path, prompt, "review")
+    ok, output = _run_opencode(repo_path, prompt, "patch-review-expert")
 
     if not ok:
         return False, output

@@ -1,10 +1,9 @@
 """Git 合入逻辑：git apply -F 0 及冲突信息收集。"""
 
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
-
-import subprocess
 
 
 @dataclass
@@ -50,9 +49,14 @@ def apply_patch(
     repo_path: str,
     patch_content: str,
     fuzz: int = 0,
+    patch_label: Optional[str] = None,
 ) -> tuple[bool, Optional[ConflictInfo]]:
     """
-    使用 git apply -F <fuzz> 应用 patch。
+    使用 git apply --reject 应用 patch。
+    git apply 无 -F 选项（fuzz 属于 GNU patch），使用 -C<n> 控制上下文行数，fuzz=0 时用 -C 3 严格匹配。
+    先将 patch 写入 patch_files/<label>.patch，再 apply，便于调试和明确正在合入的内容。文件保留不删除。
+
+    patch_label: 用于命名 patch 文件，如 commit sha 短格式，便于识别。
 
     Returns:
         (成功, None) 或 (失败, ConflictInfo)
@@ -60,10 +64,21 @@ def apply_patch(
     if not patch_content.strip():
         return True, None
 
+    repo = Path(repo_path)
+    patch_dir = repo / "patch_files"
+    patch_dir.mkdir(parents=True, exist_ok=True)
+    label = patch_label or "current"
+    patch_path = patch_dir / f"{label}.patch"
+    patch_path.write_text(patch_content, encoding="utf-8")
+    patch_rel = f"patch_files/{label}.patch"
+
+    # git apply 无 -F，用 -C<n> 控制上下文；fuzz=0 时 -C 3 严格匹配
+    context = max(0, 3 - fuzz)
+    cmd = ["git", "apply", "-C", str(context), "--reject", patch_rel]
+    print("运行命令：", " ".join(cmd))
     result = subprocess.run(
-        ["git", "apply", "-F", str(fuzz), "--reject", "--"],
+        cmd,
         cwd=repo_path,
-        input=patch_content,
         capture_output=True,
         text=True,
     )
