@@ -5,7 +5,12 @@ from typing import Optional
 
 import typer
 
-from .pending_loader import default_pending_path, load_pending_prs
+from .pending_loader import (
+    default_pending_path,
+    load_completed_prs,
+    load_pending_prs,
+    record_pr_completed,
+)
 from .pipeline import run_pipeline
 
 app = typer.Typer(
@@ -114,20 +119,31 @@ def main(
         if not from_path.is_dir():
             typer.echo(f"错误：源仓库不存在 {from_path}", err=True)
             raise typer.Exit(1)
-        pr_ids = load_pending_prs(pl_path)
+        all_pr_ids = load_pending_prs(pl_path)
+        completed = load_completed_prs(pl_path)
+        pr_ids = [p for p in all_pr_ids if p not in completed]
+        if completed:
+            typer.echo(f"已跳过 {len(completed)} 个已完成 PR")
         if not pr_ids:
             typer.echo("无待合入 PR，退出。")
             return
         typer.echo(f"共 {len(pr_ids)} 个 PR 待合入：{pr_ids[:5]}{'...' if len(pr_ids) > 5 else ''}")
         for i, pr_id in enumerate(pr_ids, 1):
             typer.echo(f"\n{'#'*60}\n[{i}/{len(pr_ids)}] PR #{pr_id}\n{'#'*60}")
-            run_pipeline(
-                from_repo=str(from_path),
-                to_repo=str(to_path),
-                gitee_url=f"{base}/{pr_id}",
-                token=token,
-                show_patch=show_patch,
-            )
+            try:
+                run_pipeline(
+                    from_repo=str(from_path),
+                    to_repo=str(to_path),
+                    gitee_url=f"{base}/{pr_id}",
+                    token=token,
+                    show_patch=show_patch,
+                    batch_pr_id=pr_id,
+                    require_review_confirmation=True,
+                )
+            except SystemExit:
+                typer.echo("用户中断，退出。")
+                raise typer.Exit(1)
+            record_pr_completed(pr_id, pl_path)
         return
 
     if gitee_url and token:

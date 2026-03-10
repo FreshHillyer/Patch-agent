@@ -1,6 +1,7 @@
 """主流程编排：PR commits 合入 + 冲突处理 + Review + 连续失败暂停。"""
 
 import subprocess
+import sys
 from typing import Optional
 
 from .git_apply import (
@@ -22,6 +23,7 @@ def _run_apply_loop(
     to_repo: str,
     commits: list,
     show_patch: bool = False,
+    require_review_confirmation: bool = False,
 ) -> None:
     """对 commit 列表执行合入循环。"""
     consecutive_errors = 0
@@ -92,6 +94,11 @@ def _run_apply_loop(
         if patch_agent_used and commit.patch_content.strip():
             print("  合入成功，调用 Review Agent...")
             review_ok, review_msg = run_review_agent(to_repo, commit.message)
+            if require_review_confirmation:
+                ans = input("  是否接受 Review 结果？(y/n): ").strip().lower()
+                if ans != "y":
+                    print("  用户拒绝，退出。")
+                    sys.exit(1)
             if not review_ok:
                 print(f"  Review 不通过: {review_msg[:200]}...")
                 consecutive_errors += 1
@@ -115,6 +122,31 @@ def _get_current_branch(repo_path: str) -> str:
     return r.stdout.strip()
 
 
+def _commit_pr_complete(to_repo: str, batch_pr_id: int) -> None:
+    """PR 全部完成后，在 to_repo 中 git add + commit。"""
+    status = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=to_repo,
+        capture_output=True,
+        text=True,
+    )
+    if not status.stdout.strip():
+        return  # 无变更
+    subprocess.run(
+        ["git", "add", "-A"],
+        cwd=to_repo,
+        capture_output=True,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "commit", "-m", f"PR {batch_pr_id} 自动合入"],
+        cwd=to_repo,
+        capture_output=True,
+        check=True,
+    )
+    print(f"  ✓ 已提交: PR {batch_pr_id} 自动合入")
+
+
 def run_pipeline(
     to_repo: str,
     from_repo: Optional[str] = None,
@@ -123,6 +155,8 @@ def run_pipeline(
     gitee_url: Optional[str] = None,
     token: Optional[str] = None,
     show_patch: bool = True,
+    batch_pr_id: Optional[int] = None,
+    require_review_confirmation: bool = False,
 ) -> None:
     """
     执行补丁回合流水线。
@@ -173,4 +207,11 @@ def run_pipeline(
 
     print(f"共 {len(commits)} 个 commits 待合入（目标分支: {to_branch}）")
     print("说明：仅当 API/本地返回的 patch 内容为空时才会跳过（如 merge commit）")
-    _run_apply_loop(to_repo, commits, show_patch)
+    _run_apply_loop(
+        to_repo,
+        commits,
+        show_patch=show_patch,
+        require_review_confirmation=require_review_confirmation,
+    )
+    if batch_pr_id is not None:
+        _commit_pr_complete(to_repo, batch_pr_id)

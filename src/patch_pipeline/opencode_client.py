@@ -100,7 +100,6 @@ def _run_opencode(
         print("--- OpenCode 输出 ---")
         print(result)
         print("---")
-        fwafwauihuih
     
     return not has_error, result
 
