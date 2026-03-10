@@ -79,9 +79,8 @@ def _run_apply_loop(
             )
             if not patch_ok:
                 print(f"  Patch Agent 失败: {patch_msg}")
-                consecutive_errors += 1
                 cleanup_rejects(to_repo)
-                continue
+                sys.exit(1)
             remove_reject_files(to_repo)
             ok = True
             patch_agent_used = True
