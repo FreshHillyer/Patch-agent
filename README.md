@@ -34,8 +34,9 @@ patch-pipeline --batch \
 **批量模式流程**：
 1. 读取 `pending_pr.txt`，过滤掉 `completed_pr.txt` 中已完成的 PR
 2. 按顺序逐个 PR 合入
-3. 每个 PR 的 commits 全部完成后：`git commit -m "PR {id} 自动合入"`，并追加到 `completed_pr.txt`
-4. 当 os-merge-expert 或 patch-review-expert 被调用时，Review 输出后需用户确认 `(y/n)`，拒绝则中断程序
+3. 每个 commit 合入成功后立即 `git commit`，commit message 使用 patch 的原始头信息（与 git am 一致）
+4. 每个 PR 的 commits 全部完成后，追加到 `completed_pr.txt`
+5. 当 os-merge-expert 或 patch-review-expert 被调用时，Review 输出后需用户确认 `(y/n)`，拒绝则中断程序
 
 ### Gitee 模式（单 PR）
 
@@ -99,7 +100,8 @@ pending_list/
 4. os-merge-expert 成功后：调用 **patch-review-expert** 审查
 5. 批量模式下：Review 输出后需用户确认 `(y/n)`，拒绝则退出
 6. 连续 2 次失败：CLI 暂停，等待用户手动解决后按 Enter 继续
-7. PR 全部完成（批量模式）：`git commit -m "PR {id} 自动合入"`，并记录到 `completed_pr.txt`
+7. 每个 commit 合入成功后：`git add -A` + `git commit -F -`（使用 patch 原始 commit message）
+8. PR 全部完成（批量模式）：记录到 `completed_pr.txt`
 
 ## 跳过的 commit
 

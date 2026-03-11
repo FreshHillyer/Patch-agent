@@ -137,7 +137,6 @@ def main(
                     gitee_url=f"{base}/{pr_id}",
                     token=token,
                     show_patch=show_patch,
-                    batch_pr_id=pr_id,
                     require_review_confirmation=True,
                 )
             except SystemExit:

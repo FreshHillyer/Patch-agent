@@ -100,13 +100,42 @@ def _run_apply_loop(
                     sys.exit(1)
             if not review_ok:
                 print(f"  Review 不通过: {review_msg[:200]}...")
-                consecutive_errors += 1
-                continue
+                sys.exit(1)
 
         consecutive_errors = 0
+        _commit_applied(to_repo, commit)
         print(f"  ✓ commit {commit.sha[:7]} 完成")
 
     print("\n流水线结束。")
+
+
+def _commit_applied(to_repo: str, commit: CommitInfo) -> None:
+    """合入成功后，用 patch 的 commit message 提交一次。"""
+    status = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=to_repo,
+        capture_output=True,
+        text=True,
+    )
+    if not status.stdout.strip():
+        return
+    subprocess.run(
+        ["git", "add", "-A"],
+        cwd=to_repo,
+        capture_output=True,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "commit", "-F", "-"],
+        cwd=to_repo,
+        input=commit.message,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    first_line = commit.message.split("\n")[0][:60]
+    suffix = "..." if len(commit.message.split("\n")[0]) > 60 else ""
+    print(f"  ✓ 已提交: {first_line}{suffix}")
 
 
 def _get_current_branch(repo_path: str) -> str:
@@ -121,31 +150,6 @@ def _get_current_branch(repo_path: str) -> str:
     return r.stdout.strip()
 
 
-def _commit_pr_complete(to_repo: str, batch_pr_id: int) -> None:
-    """PR 全部完成后，在 to_repo 中 git add + commit。"""
-    status = subprocess.run(
-        ["git", "status", "--porcelain"],
-        cwd=to_repo,
-        capture_output=True,
-        text=True,
-    )
-    if not status.stdout.strip():
-        return  # 无变更
-    subprocess.run(
-        ["git", "add", "-A"],
-        cwd=to_repo,
-        capture_output=True,
-        check=True,
-    )
-    subprocess.run(
-        ["git", "commit", "-m", f"PR {batch_pr_id} 自动合入"],
-        cwd=to_repo,
-        capture_output=True,
-        check=True,
-    )
-    print(f"  ✓ 已提交: PR {batch_pr_id} 自动合入")
-
-
 def run_pipeline(
     to_repo: str,
     from_repo: Optional[str] = None,
@@ -154,7 +158,6 @@ def run_pipeline(
     gitee_url: Optional[str] = None,
     token: Optional[str] = None,
     show_patch: bool = True,
-    batch_pr_id: Optional[int] = None,
     require_review_confirmation: bool = False,
 ) -> None:
     """
@@ -212,5 +215,3 @@ def run_pipeline(
         show_patch=show_patch,
         require_review_confirmation=require_review_confirmation,
     )
-    if batch_pr_id is not None:
-        _commit_pr_complete(to_repo, batch_pr_id)
